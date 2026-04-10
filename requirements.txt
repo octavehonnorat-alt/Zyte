@@ -5,6 +5,14 @@
 
 # ─── Core Scraping Framework ──────────────────────────────────────────────────
 scrapy==2.11.2
+# SECURITY NOTICE: CVE – Scrapy DoS vulnerability (affected: >=0.7, <=2.14.1; no patched
+# release exists as of 2026-04-10).  Mitigations applied in this project:
+#   1. DOWNLOAD_MAXSIZE and DOWNLOAD_WARNSIZE are set in settings.py to limit
+#      response body size and prevent memory exhaustion.
+#   2. All requests are routed through Zyte API; direct network exposure of the
+#      Scrapy downloader to untrusted responses is minimised.
+#   3. Monitor https://github.com/scrapy/scrapy/security/advisories for a patch
+#      and upgrade as soon as one is released.
 scrapy-zyte-api==0.23.0
 zyte-api==0.4.8
 itemadapter==0.9.0
@@ -21,11 +29,11 @@ dnspython==2.6.1
 aiosmtplib==3.0.1
 
 # ─── Cryptography: Chain of Custody + ZKP (FIPS 140-3 approved algorithms) ───
-cryptography==42.0.8
+cryptography==46.0.5
 
 # ─── Async Infrastructure (Twisted asyncio reactor) ──────────────────────────
 twisted==24.3.0
-aiohttp==3.9.5
+aiohttp==3.13.3
 httpx[http2]==0.27.0
 anyio==4.4.0
 
@@ -37,7 +45,7 @@ structlog==24.2.0
 colorama==0.4.6
 
 # ─── High-Performance Serialisation ──────────────────────────────────────────
-orjson==3.10.3
+orjson==3.11.6
 
 # ─── Resilience & Retry (exponential back-off + jitter) ──────────────────────
 tenacity==8.3.0

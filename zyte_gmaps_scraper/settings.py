@@ -119,6 +119,13 @@ MEMUSAGE_ENABLED = True
 MEMUSAGE_LIMIT_MB = 4096
 MEMUSAGE_WARNING_MB = 2048
 
+# ─── Scrapy DoS mitigation (no patch available for CVE; limit response sizes) ──
+# Responses larger than DOWNLOAD_MAXSIZE are dropped; those exceeding
+# DOWNLOAD_WARNSIZE trigger a warning.  These bounds constrain the attack
+# surface of the unpatched Scrapy DoS vulnerability.
+DOWNLOAD_MAXSIZE = 10 * 1024 * 1024    # 10 MB hard cap
+DOWNLOAD_WARNSIZE = 5 * 1024 * 1024    # 5 MB warning threshold
+
 # ─── Duplicate filtering ──────────────────────────────────────────────────────
 DUPEFILTER_CLASS = "scrapy.dupefilters.RFPDupeFilter"
 DUPEFILTER_DEBUG = False

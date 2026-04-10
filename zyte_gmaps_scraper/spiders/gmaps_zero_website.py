@@ -52,6 +52,7 @@ import urllib.parse
 from datetime import datetime, timezone
 from typing import AsyncGenerator, Optional
 
+import aiohttp
 import phonenumbers
 import scrapy
 from scrapy.http import Response
@@ -208,11 +209,10 @@ class _RegistryClient:
     _CH_BASE = "https://api.company-information.service.gov.uk"
 
     def __init__(self) -> None:
-        import aiohttp
         self._session: Optional[aiohttp.ClientSession] = None
+        self._timeout = aiohttp.ClientTimeout(total=10)
 
-    async def _get_session(self):
-        import aiohttp
+    async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession()
         return self._session
@@ -252,7 +252,7 @@ class _RegistryClient:
         params = {"q": f'denominationUniteLegale:"{name}"', "nombre": 1}
         headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
 
-        async with session.get(url, params=params, headers=headers, timeout=10) as resp:
+        async with session.get(url, params=params, headers=headers, timeout=self._timeout) as resp:
             if resp.status != 200:
                 return None
             data = await resp.json()
@@ -267,13 +267,12 @@ class _RegistryClient:
         if not api_key:
             return None
 
-        import aiohttp
         session = await self._get_session()
         url = f"{self._CH_BASE}/search/companies"
         params = {"q": name, "items_per_page": 1}
         auth = aiohttp.BasicAuth(api_key, "")
 
-        async with session.get(url, params=params, auth=auth, timeout=10) as resp:
+        async with session.get(url, params=params, auth=auth, timeout=self._timeout) as resp:
             if resp.status != 200:
                 return None
             # Companies House does not expose email in the public search API.
