@@ -5,14 +5,22 @@
 
 # ─── Core Scraping Framework ──────────────────────────────────────────────────
 scrapy==2.11.2
-# SECURITY NOTICE: CVE – Scrapy DoS vulnerability (affected: >=0.7, <=2.14.1; no patched
-# release exists as of 2026-04-10).  Mitigations applied in this project:
-#   1. DOWNLOAD_MAXSIZE and DOWNLOAD_WARNSIZE are set in settings.py to limit
-#      response body size and prevent memory exhaustion.
-#   2. All requests are routed through Zyte API; direct network exposure of the
-#      Scrapy downloader to untrusted responses is minimised.
-#   3. Monitor https://github.com/scrapy/scrapy/security/advisories for a patch
-#      and upgrade as soon as one is released.
+# SECURITY NOTICE: Unassigned CVE – Scrapy denial-of-service vulnerability
+# (no CVE number has been issued yet; tracked in the GitHub Advisory Database).
+# Affected: >= 0.7, <= 2.14.1.  No patched release is available as of 2026-04-10.
+# Mitigations applied in this project:
+#   1. ResponseGuardMiddleware (middlewares.py, priority 50) provides four
+#      independent defence layers: Content-Length pre-check, stacked
+#      Content-Encoding rejection (zip-bomb), header count cap (100), and
+#      individual header value length cap (8 KB).
+#   2. DOWNLOAD_MAXSIZE / DOWNLOAD_WARNSIZE cap response body size.
+#   3. DOWNLOAD_FAIL_ON_DATALOSS aborts mid-stream connections.
+#   4. REDIRECT_MAX_TIMES=5 caps redirect chains (default is 20).
+#   5. DOWNLOAD_TIMEOUT=30 s limits slow-response exposure window.
+#   All requests are also routed through Zyte API, which provides an
+#   additional upstream filtering layer.
+# Monitor https://github.com/scrapy/scrapy/security/advisories and upgrade
+# as soon as a patched release becomes available.
 scrapy-zyte-api==0.23.0
 zyte-api==0.4.8
 itemadapter==0.9.0
