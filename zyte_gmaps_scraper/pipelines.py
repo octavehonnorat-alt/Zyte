@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -168,7 +169,6 @@ class CryptographicSigningPipeline:
         email = str(adapter.get("email", ""))
         source_url = adapter.get("source_url") or adapter.get("extraction_source", "")
         scraped_at = adapter.get("scraped_at") or adapter.get("extracted_at")
-        from datetime import datetime, timezone
         if scraped_at is None:
             scraped_at = datetime.now(timezone.utc)
 

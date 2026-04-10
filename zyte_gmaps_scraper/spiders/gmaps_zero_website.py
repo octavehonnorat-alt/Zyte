@@ -44,6 +44,7 @@ Usage
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 import re
@@ -226,7 +227,7 @@ class _RegistryClient:
         """Return an email address from a public registry, or None."""
         country = country_hint.lower()
         try:
-            if "france" in country or "fr" == country:
+            if "france" in country or country == "fr":
                 return await self._query_sirene(business_name)
             if "uk" in country or "united kingdom" in country:
                 return await self._query_companies_house(business_name)
@@ -664,7 +665,6 @@ def _extract_business_id(url: str) -> str:
     Tries the CID (``1s0x...``) or the ``place_id`` parameter; falls back to
     a SHA-256 of the URL to ensure uniqueness.
     """
-    import hashlib
     # Pattern: /maps/place/Name/@lat,lng,Xm/data=!3m1!4b1!4m...!1s0xHEX:0xHEX
     cid_match = re.search(r"!1s(0x[0-9a-fA-F]+:[0-9a-fA-F]+)", url)
     if cid_match:

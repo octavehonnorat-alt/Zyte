@@ -14,6 +14,7 @@ No secret may appear in this file.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -27,7 +28,9 @@ NEWSPIDER_MODULE = "zyte_gmaps_scraper.spiders"
 
 # ─── Zyte API ─────────────────────────────────────────────────────────────────
 # OWASP ASVS 5.0 §V2.10: credentials never hard-coded
-ZYTE_API_KEY: str = os.environ["ZYTE_API_KEY"]  # Raises at startup if absent
+ZYTE_API_KEY: str = os.environ.get("ZYTE_API_KEY") or sys.exit(  # type: ignore[assignment]
+    "FATAL: ZYTE_API_KEY environment variable is required but not set."
+)
 
 # Default automap: every request goes through Zyte's browser by default.
 ZYTE_API_AUTOMAP_PARAMS: dict = {
