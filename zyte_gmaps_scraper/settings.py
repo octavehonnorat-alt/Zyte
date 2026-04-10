@@ -49,8 +49,8 @@ REQUEST_FINGERPRINTER_CLASS = "scrapy_zyte_api.ScrapyZyteAPIRequestFingerprinter
 # Kubernetes pods), each operating at this concurrency level.
 CONCURRENT_REQUESTS = 128
 CONCURRENT_REQUESTS_PER_DOMAIN = 32
-DOWNLOAD_TIMEOUT = 60
-DOWNLOAD_DELAY = 0  # Zyte handles back-pressure internally
+DOWNLOAD_TIMEOUT = 30       # tightened from 60 s to limit slow-response DoS window
+DOWNLOAD_DELAY = 0          # Zyte handles back-pressure internally
 
 AUTOTHROTTLE_ENABLED = True
 AUTOTHROTTLE_START_DELAY = 0.25
@@ -68,6 +68,9 @@ RETRY_PRIORITY_ADJUST = -1
 DOWNLOADER_MIDDLEWARES: dict = {
     # Zyte API integration (must run last, after custom middlewares)
     "scrapy_zyte_api.ScrapyZyteAPIDownloaderMiddleware": 1000,
+    # Response guard runs first – culls bad responses before any other
+    # middleware or spider callback can parse them (Scrapy DoS mitigation).
+    "zyte_gmaps_scraper.middlewares.ResponseGuardMiddleware": 50,
     # Custom behavioural mimicry (runs before Zyte middleware)
     "zyte_gmaps_scraper.middlewares.BehavioralMimicryMiddleware": 100,
     # Adaptive DOM health-check
@@ -119,12 +122,22 @@ MEMUSAGE_ENABLED = True
 MEMUSAGE_LIMIT_MB = 4096
 MEMUSAGE_WARNING_MB = 2048
 
-# ─── Scrapy DoS mitigation (no patch available for CVE; limit response sizes) ──
-# Responses larger than DOWNLOAD_MAXSIZE are dropped; those exceeding
-# DOWNLOAD_WARNSIZE trigger a warning.  These bounds constrain the attack
-# surface of the unpatched Scrapy DoS vulnerability.
-DOWNLOAD_MAXSIZE = 10 * 1024 * 1024    # 10 MB hard cap
-DOWNLOAD_WARNSIZE = 5 * 1024 * 1024    # 5 MB warning threshold
+# ─── Scrapy DoS mitigation (no patch available for CVE; layered defence) ───────
+# Primary cap: Scrapy's own downloader stops reading after DOWNLOAD_MAXSIZE.
+# Secondary cap: ResponseGuardMiddleware independently enforces the same limit
+# and additionally rejects stacked Content-Encoding, oversized headers, and
+# excessive header counts before any other middleware processes the response.
+# Monitor https://github.com/scrapy/scrapy/security/advisories for a patch.
+DOWNLOAD_MAXSIZE = 10 * 1024 * 1024     # 10 MB hard cap (must match ResponseGuardMiddleware)
+DOWNLOAD_WARNSIZE = 5 * 1024 * 1024     # 5 MB soft warning
+DOWNLOAD_FAIL_ON_DATALOSS = True        # abort connections that close mid-stream unexpectedly
+
+# ─── Redirect limits (prevent redirect-chain-based DoS) ───────────────────────
+REDIRECT_ENABLED = True
+REDIRECT_MAX_TIMES = 5                  # default is 20; tightened here
+
+# ─── Connection / thread-pool limits ──────────────────────────────────────────
+REACTOR_THREADPOOL_MAXSIZE = 10         # cap Twisted DNS thread pool
 
 # ─── Duplicate filtering ──────────────────────────────────────────────────────
 DUPEFILTER_CLASS = "scrapy.dupefilters.RFPDupeFilter"

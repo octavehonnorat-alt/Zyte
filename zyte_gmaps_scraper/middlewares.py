@@ -3,6 +3,21 @@ Custom Scrapy middlewares for zyte_gmaps_scraper.
 
 Middlewares implemented
 -----------------------
+ResponseGuardMiddleware  (priority 50 – runs first)
+    Defense-in-depth guard against the unpatched Scrapy DoS vulnerability
+    (no patch available for Scrapy >= 0.7, <= 2.14.1).  Enforces four
+    independent layers independently of Scrapy's own DOWNLOAD_MAXSIZE:
+
+    1. Content-Length pre-check  – drop any response that advertises a body
+       exceeding MAX_RESPONSE_BYTES before downstream middlewares parse it.
+    2. Stacked / unknown Content-Encoding rejection – "gzip, gzip" or any
+       multi-layer compression scheme is a classic zip-bomb vector; rejected
+       with IgnoreRequest so Scrapy never attempts to decompress the body.
+    3. Header count cap – more than MAX_HEADER_COUNT response headers is
+       anomalous and could cause memory exhaustion in header-parsing code.
+    4. Individual header value length cap – each header value is bounded to
+       MAX_HEADER_VALUE_BYTES to prevent header-based buffer pressure.
+
 BehavioralMimicryMiddleware
     Injects human-like request headers (Accept-Language, viewport hints) and
     randomised timing jitter to reduce behavioural fingerprinting signals.
@@ -40,6 +55,18 @@ from scrapy.http import Request, Response
 
 logger = logging.getLogger(__name__)
 
+# ─── ResponseGuardMiddleware constants ────────────────────────────────────────
+# Must be kept in sync with DOWNLOAD_MAXSIZE in settings.py.
+_MAX_RESPONSE_BYTES = 10 * 1024 * 1024   # 10 MB
+_MAX_HEADER_COUNT = 100
+_MAX_HEADER_VALUE_BYTES = 8_192          # 8 KB per header value
+
+# Only single-layer well-understood encodings are accepted.
+# Stacked (e.g. "gzip, gzip") or unknown schemes are rejected outright.
+_ALLOWED_ENCODINGS: frozenset[str] = frozenset(
+    {"gzip", "deflate", "br", "identity", "zstd", ""}
+)
+
 # ─── Anti-fingerprinting constants ────────────────────────────────────────────
 _ACCEPT_LANGUAGE_POOL = [
     "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
@@ -63,6 +90,104 @@ _ANTI_BOT_INDICATORS = [
     "perimeterx",
     "datadome",
 ]
+
+
+# ─── ResponseGuardMiddleware ──────────────────────────────────────────────────
+
+class ResponseGuardMiddleware:
+    """
+    Layered defense-in-depth guard for the unpatched Scrapy DoS vulnerability.
+
+    All four checks run inside ``process_response``, which Scrapy invokes
+    *after* the body bytes are received but *before* any spider callback or
+    other middleware calls ``response.text`` / ``response.body``.  Raising
+    ``IgnoreRequest`` here prevents further processing and frees the buffer.
+
+    Priority in settings.py: 50 (lower number = runs earlier than all other
+    custom middlewares, ensuring bad responses are culled first).
+    """
+
+    def __init__(
+        self,
+        max_response_bytes: int = _MAX_RESPONSE_BYTES,
+        max_header_count: int = _MAX_HEADER_COUNT,
+        max_header_value_bytes: int = _MAX_HEADER_VALUE_BYTES,
+    ) -> None:
+        self._max_response_bytes = max_response_bytes
+        self._max_header_count = max_header_count
+        self._max_header_value_bytes = max_header_value_bytes
+
+    @classmethod
+    def from_crawler(cls, crawler: Any) -> "ResponseGuardMiddleware":
+        return cls(
+            max_response_bytes=crawler.settings.getint(
+                "DOWNLOAD_MAXSIZE", _MAX_RESPONSE_BYTES
+            ),
+        )
+
+    def process_response(
+        self, request: Request, response: Response, spider: Spider
+    ) -> Response:
+        # ── Layer 1: Content-Length pre-check ─────────────────────────────────
+        # Reject responses that *advertise* a body larger than our cap, before
+        # any middleware attempts to decode or parse the bytes.
+        cl_header: bytes = response.headers.get(b"Content-Length", b"")
+        if cl_header:
+            try:
+                claimed_length = int(cl_header.strip())
+                if claimed_length > self._max_response_bytes:
+                    raise IgnoreRequest(
+                        f"Oversized Content-Length {claimed_length} "
+                        f"(limit {self._max_response_bytes}) from {request.url}"
+                    )
+            except ValueError:
+                # Non-integer Content-Length is malformed; log and continue so
+                # Scrapy's own DOWNLOAD_MAXSIZE enforcement takes over.
+                logger.warning(
+                    "Malformed Content-Length header %r from %s",
+                    cl_header,
+                    request.url,
+                )
+
+        # ── Layer 2: Stacked / unknown Content-Encoding rejection ─────────────
+        # A response with "Content-Encoding: gzip, gzip" (or similar stacked
+        # schemes) is the hallmark of a zip-bomb attack.  We only permit a
+        # single, well-known encoding layer.
+        ce_header: bytes = response.headers.get(b"Content-Encoding", b"")
+        if ce_header:
+            raw_encoding = ce_header.decode("latin-1", errors="replace").strip().lower()
+            layers = [layer.strip() for layer in raw_encoding.split(",")]
+
+            if len(layers) > 1:
+                raise IgnoreRequest(
+                    f"Stacked Content-Encoding {raw_encoding!r} rejected "
+                    f"(zip-bomb risk) from {request.url}"
+                )
+            if layers[0] not in _ALLOWED_ENCODINGS:
+                raise IgnoreRequest(
+                    f"Unknown/disallowed Content-Encoding {raw_encoding!r} "
+                    f"from {request.url}"
+                )
+
+        # ── Layer 3: Header count cap ─────────────────────────────────────────
+        header_count = len(response.headers)
+        if header_count > self._max_header_count:
+            raise IgnoreRequest(
+                f"Excessive response header count {header_count} "
+                f"(limit {self._max_header_count}) from {request.url}"
+            )
+
+        # ── Layer 4: Individual header value length cap ───────────────────────
+        for header_name, header_values in response.headers.items():
+            for val in header_values:
+                if len(val) > self._max_header_value_bytes:
+                    name_str = header_name.decode("latin-1", errors="replace")
+                    raise IgnoreRequest(
+                        f"Header {name_str!r} value length {len(val)} exceeds "
+                        f"limit {self._max_header_value_bytes} from {request.url}"
+                    )
+
+        return response
 
 
 # ─── BehavioralMimicryMiddleware ──────────────────────────────────────────────

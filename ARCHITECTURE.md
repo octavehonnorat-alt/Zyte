@@ -152,7 +152,7 @@ BusinessProfile (Pydantic)
 | 2 | **OWASP ASVS 5.0 §V5.2** – Sanitisation | Pre-compiled bounded regex; no `eval`/`exec` |
 | 3 | **OWASP ASVS 5.0 §V7** – Cryptography | BLAKE2b-512, SHA3-256, AES-256-GCM (FIPS 140-3) |
 | 4 | **OWASP ASVS 5.0 §V8** – Data Protection | PII encrypted at rest; commitments are public |
-| 5 | **OWASP ASVS 5.0 §V2.10** – Credential hygiene | All secrets from env vars; `KeyError` at startup if absent |
+| 5 | **OWASP ASVS 5.0 §V2.10** – Credential hygiene | All secrets from env vars; `sys.exit` at startup if absent |
 | 6 | **NIST SP 800-57** – Key management | 256-bit keys, CSPRNG nonces (`secrets.token_bytes`) |
 | 7 | **NIST SP 800-188** – Data Provenance | `ChainEntry` tamper-evident ledger with chained BLAKE2b |
 | 8 | **ISO 27001 §A.12.4** – Audit logging | Structured `structlog` with ISO 8601 timestamps |
@@ -172,7 +172,7 @@ BusinessProfile (Pydantic)
 | 22 | **ZKP-compatible commitments** | Pedersen-style `BLAKE2b(data ‖ nonce)` |
 | 23 | **Exponential back-off + jitter** | `tenacity` + Scrapy AutoThrottle AIMD |
 | 24 | **Dead-letter queue** | `DeadLetterMiddleware` → `dead_letter.jsonl` |
-| 25 | **E.164 phone normalisation** | `phonenumbers` (ITU-T E.123/E.164) |
+| 25 | **Scrapy DoS (unpatched) – layered mitigation** | `ResponseGuardMiddleware` (Content-Length, stacked-encoding, header-count, header-value-length) + `DOWNLOAD_MAXSIZE` + `DOWNLOAD_FAIL_ON_DATALOSS` + `REDIRECT_MAX_TIMES=5` + `DOWNLOAD_TIMEOUT=30` |
 
 ### 4.2 Cryptographic Chain of Custody
 
