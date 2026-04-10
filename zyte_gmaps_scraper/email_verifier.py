@@ -51,8 +51,11 @@ _DNS_TIMEOUT = 8            # seconds for DNS resolution
 _CACHE_TTL = 3600           # seconds to cache verification results
 _CACHE_MAX_SIZE = 50_000    # max LRU cache entries (≈ 50 k emails)
 _SMTP_PORT = 25
-_SMTP_HELO_DOMAIN = "verify.example.com"   # RFC 5321 §4.1.4 compliant HELO
-_SMTP_PROBE_SENDER = "probe@verify.example.com"
+_SMTP_HELO_DOMAIN = os.environ.get("SMTP_HELO_DOMAIN", "verify.example.com")
+# NOTE: For production use, set SMTP_HELO_DOMAIN to a domain you control
+# that has a valid forward DNS record.  Using example.com may cause some
+# strict SMTP servers to reject the EHLO greeting.
+_SMTP_PROBE_SENDER = f"probe@{_SMTP_HELO_DOMAIN}"
 
 # Domains known to block SMTP probing – skip SMTP step for these
 _SMTP_BLOCKED_DOMAINS: frozenset[str] = frozenset(

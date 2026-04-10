@@ -172,7 +172,16 @@ BusinessProfile (Pydantic)
 | 22 | **ZKP-compatible commitments** | Pedersen-style `BLAKE2b(data ‖ nonce)` |
 | 23 | **Exponential back-off + jitter** | `tenacity` + Scrapy AutoThrottle AIMD |
 | 24 | **Dead-letter queue** | `DeadLetterMiddleware` → `dead_letter.jsonl` |
-| 25 | **Scrapy DoS (unpatched) – layered mitigation** | `ZyteApiEnforcementMiddleware` (priority 10, architectural isolation – no direct TCP to untrusted hosts) + `ResponseGuardMiddleware` (priority 595, pre-decompression: Content-Length, actual body bytes, stacked-encoding, header-count, header-value-length) + `DOWNLOAD_MAXSIZE` + `DOWNLOAD_FAIL_ON_DATALOSS` + `REDIRECT_MAX_TIMES=5` + `DOWNLOAD_TIMEOUT=30` |
+| 25 | **Scrapy DoS (unpatched) – layered mitigation** | See detail below |
+
+**Standard #25 – full mitigation stack (no patch available for Scrapy >= 0.7, <= 2.14.1):**
+
+* `ZyteApiEnforcementMiddleware` (priority 10) – architectural isolation: Scrapy's downloader never opens a direct TCP connection to an untrusted host; any request missing `zyte_api`/`zyte_api_automap` meta is rejected before the downloader sees it.
+* `ResponseGuardMiddleware` (priority 595) – pre-decompression guard; runs immediately before `HttpCompressionMiddleware` (590) in `process_response` (descending order), so all five checks execute while the body is still compressed: (1) `Content-Length` header, (2) actual compressed body bytes, (3) stacked/unknown `Content-Encoding`, (4) header count cap, (5) header value length cap.
+* `DOWNLOAD_MAXSIZE = 10 MB` – Scrapy-native body size hard cap.
+* `DOWNLOAD_FAIL_ON_DATALOSS = True` – aborts mid-stream closures.
+* `REDIRECT_MAX_TIMES = 5` – caps redirect chains (default is 20).
+* `DOWNLOAD_TIMEOUT = 30 s` – limits slow-response exposure window.
 
 ### 4.2 Cryptographic Chain of Custody
 

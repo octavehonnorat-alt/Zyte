@@ -205,7 +205,10 @@ class _RegistryClient:
     Additional providers can be added by sub-classing or extending ``_query``.
     """
 
-    _SIRENE_BASE = os.getenv("SIRENE_API_BASE_URL", "https://api.insee.fr/api-sirene/3.11")
+    # SIRENE_API_BASE_URL can be overridden to pin a specific API version,
+    # e.g. "https://api.insee.fr/api-sirene/3.11".  The default omits the
+    # version so the client always targets the latest stable endpoint.
+    _SIRENE_BASE = os.getenv("SIRENE_API_BASE_URL", "https://api.insee.fr/api-sirene")
     _CH_BASE = "https://api.company-information.service.gov.uk"
 
     def __init__(self) -> None:
