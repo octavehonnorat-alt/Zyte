@@ -172,7 +172,7 @@ BusinessProfile (Pydantic)
 | 22 | **ZKP-compatible commitments** | Pedersen-style `BLAKE2b(data ‖ nonce)` |
 | 23 | **Exponential back-off + jitter** | `tenacity` + Scrapy AutoThrottle AIMD |
 | 24 | **Dead-letter queue** | `DeadLetterMiddleware` → `dead_letter.jsonl` |
-| 25 | **Scrapy DoS (unpatched) – layered mitigation** | `ResponseGuardMiddleware` (Content-Length, stacked-encoding, header-count, header-value-length) + `DOWNLOAD_MAXSIZE` + `DOWNLOAD_FAIL_ON_DATALOSS` + `REDIRECT_MAX_TIMES=5` + `DOWNLOAD_TIMEOUT=30` |
+| 25 | **Scrapy DoS (unpatched) – layered mitigation** | `ZyteApiEnforcementMiddleware` (priority 10, architectural isolation – no direct TCP to untrusted hosts) + `ResponseGuardMiddleware` (priority 595, pre-decompression: Content-Length, actual body bytes, stacked-encoding, header-count, header-value-length) + `DOWNLOAD_MAXSIZE` + `DOWNLOAD_FAIL_ON_DATALOSS` + `REDIRECT_MAX_TIMES=5` + `DOWNLOAD_TIMEOUT=30` |
 
 ### 4.2 Cryptographic Chain of Custody
 

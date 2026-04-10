@@ -66,12 +66,21 @@ RETRY_PRIORITY_ADJUST = -1
 
 # ─── Middleware stack ─────────────────────────────────────────────────────────
 DOWNLOADER_MIDDLEWARES: dict = {
-    # Zyte API integration (must run last, after custom middlewares)
+    # Zyte API integration (must run last, after all custom middlewares)
     "scrapy_zyte_api.ScrapyZyteAPIDownloaderMiddleware": 1000,
-    # Response guard runs first – culls bad responses before any other
-    # middleware or spider callback can parse them (Scrapy DoS mitigation).
-    "zyte_gmaps_scraper.middlewares.ResponseGuardMiddleware": 50,
-    # Custom behavioural mimicry (runs before Zyte middleware)
+
+    # ── Scrapy DoS hardening (unpatched vulnerability, no fix available) ──────
+    # Priority 10: Architectural isolation – reject any request not routed
+    # through Zyte API, so Scrapy's downloader never opens a direct TCP
+    # connection to an untrusted host.
+    "zyte_gmaps_scraper.middlewares.ZyteApiEnforcementMiddleware": 10,
+    # Priority 595: Pre-decompression guard – runs immediately BEFORE Scrapy's
+    # HttpCompressionMiddleware (590) in process_response (descending order),
+    # validating Content-Length, actual body bytes, Content-Encoding,
+    # header count, and header value length while the body is still compressed.
+    "zyte_gmaps_scraper.middlewares.ResponseGuardMiddleware": 595,
+
+    # Custom behavioural mimicry
     "zyte_gmaps_scraper.middlewares.BehavioralMimicryMiddleware": 100,
     # Adaptive DOM health-check
     "zyte_gmaps_scraper.middlewares.AdaptiveDOMMiddleware": 200,

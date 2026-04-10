@@ -1,39 +1,51 @@
 """
 Custom Scrapy middlewares for zyte_gmaps_scraper.
 
-Middlewares implemented
------------------------
-ResponseGuardMiddleware  (priority 50 – runs first)
-    Defense-in-depth guard against the unpatched Scrapy DoS vulnerability
-    (no patch available for Scrapy >= 0.7, <= 2.14.1).  Enforces four
-    independent layers independently of Scrapy's own DOWNLOAD_MAXSIZE:
+Scrapy DoS vulnerability (unpatched) – mitigation layers
+---------------------------------------------------------
+This project cannot upgrade past Scrapy 2.11.2 because no patched release
+exists for the advisory (Scrapy >= 0.7, <= 2.14.1).  Two complementary
+middlewares close the remaining attack surface:
 
-    1. Content-Length pre-check  – drop any response that advertises a body
-       exceeding MAX_RESPONSE_BYTES before downstream middlewares parse it.
-    2. Stacked / unknown Content-Encoding rejection – "gzip, gzip" or any
-       multi-layer compression scheme is a classic zip-bomb vector; rejected
-       with IgnoreRequest so Scrapy never attempts to decompress the body.
-    3. Header count cap – more than MAX_HEADER_COUNT response headers is
-       anomalous and could cause memory exhaustion in header-parsing code.
-    4. Individual header value length cap – each header value is bounded to
-       MAX_HEADER_VALUE_BYTES to prevent header-based buffer pressure.
+ZyteApiEnforcementMiddleware  (priority 10 – first in process_request)
+    Architectural isolation: every outgoing Scrapy request MUST carry the
+    ``zyte_api`` or ``zyte_api_automap`` meta key, which routes it through
+    Zyte API's managed infrastructure.  Any request lacking that key is
+    rejected with IgnoreRequest before it reaches the downloader.
+
+    Effect: Scrapy's TCP stack never opens a direct connection to an
+    untrusted host.  All bytes that Scrapy processes originate from Zyte
+    API, a controlled source, eliminating the primary remote-exploitation
+    path of the unpatched DoS vulnerability.
+
+ResponseGuardMiddleware  (priority 595 – runs before HttpCompressionMiddleware)
+    Scrapy's built-in HttpCompressionMiddleware sits at priority 590.  In
+    process_response, Scrapy calls middlewares in *descending* priority
+    order (higher number → runs first).  At priority 595 our guard runs
+    immediately before the decompression step, so it validates the raw
+    compressed bytes and all headers *before* any decompression occurs.
+
+    Five independent layers:
+    1. Content-Length header check  – reject if advertised size > cap.
+    2. Actual compressed body size  – reject if len(response.body) > cap
+       (catches servers that lie about or omit Content-Length).
+    3. Stacked Content-Encoding     – "gzip, gzip" and unknown encodings
+       raise IgnoreRequest; Scrapy never attempts to decompress.
+    4. Response header count cap    – anomalous header counts dropped.
+    5. Header value length cap      – each value bounded to 8 KB.
 
 BehavioralMimicryMiddleware
-    Injects human-like request headers (Accept-Language, viewport hints) and
-    randomised timing jitter to reduce behavioural fingerprinting signals.
+    Injects human-like request headers (Accept-Language, viewport hints)
+    to reduce behavioural fingerprinting signals.
 
 AdaptiveDOMMiddleware
-    Detects when a response contains a known anti-bot challenge page and
-    marks the request for retry via Zyte API's browser mode with
-    `javascript=True` escalation.
+    Detects anti-bot challenge pages and escalates to full browser render.
 
 DomainRateLimitMiddleware
-    Enforces per-domain request rate caps independent of Zyte's internal
-    throttle, acting as a secondary back-pressure valve.
+    Per-domain token-bucket rate limiter (secondary back-pressure valve).
 
 DeadLetterMiddleware
-    Captures items that fail all pipeline stages and writes them to a
-    ``dead_letter.jsonl`` file for post-hoc analysis.
+    Captures dropped/errored items to ``dead_letter.jsonl``.
 """
 
 from __future__ import annotations
@@ -55,6 +67,10 @@ from scrapy.http import Request, Response
 
 logger = logging.getLogger(__name__)
 
+# ─── ZyteApiEnforcementMiddleware constant ────────────────────────────────────
+# All requests must carry one of these meta keys to be routed through Zyte API.
+_ZYTE_META_KEYS: frozenset[str] = frozenset({"zyte_api", "zyte_api_automap"})
+
 # ─── ResponseGuardMiddleware constants ────────────────────────────────────────
 # Must be kept in sync with DOWNLOAD_MAXSIZE in settings.py.
 _MAX_RESPONSE_BYTES = 10 * 1024 * 1024   # 10 MB
@@ -67,6 +83,39 @@ _ALLOWED_ENCODINGS: frozenset[str] = frozenset(
     {"gzip", "deflate", "br", "identity", "zstd", ""}
 )
 
+
+# ─── ZyteApiEnforcementMiddleware ─────────────────────────────────────────────
+
+class ZyteApiEnforcementMiddleware:
+    """
+    Architectural isolation layer: rejects any request not routed via Zyte API.
+
+    Scrapy's downloader is never allowed to open a direct TCP connection to
+    an untrusted host.  Every request must carry ``zyte_api`` or
+    ``zyte_api_automap`` in its meta; otherwise it is dropped before the
+    downloader sees it.
+
+    This eliminates the primary remote-exploitation path of the unpatched
+    Scrapy DoS vulnerability: an attacker-controlled server can never feed
+    raw bytes directly into Scrapy's vulnerable HTTP-handling code.
+
+    Priority 10 ensures this check runs before all other middlewares in
+    process_request, making bypass impossible from within the middleware stack.
+    """
+
+    @classmethod
+    def from_crawler(cls, crawler: Any) -> "ZyteApiEnforcementMiddleware":
+        return cls()
+
+    def process_request(self, request: Request, spider: Spider) -> None:
+        if not any(k in request.meta for k in _ZYTE_META_KEYS):
+            raise IgnoreRequest(
+                f"Direct request rejected – must be routed through Zyte API "
+                f"(set zyte_api or zyte_api_automap in meta): {request.url}"
+            )
+
+
+# ─── ResponseGuardMiddleware ──────────────────────────────────────────────────
 # ─── Anti-fingerprinting constants ────────────────────────────────────────────
 _ACCEPT_LANGUAGE_POOL = [
     "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
@@ -96,15 +145,24 @@ _ANTI_BOT_INDICATORS = [
 
 class ResponseGuardMiddleware:
     """
-    Layered defense-in-depth guard for the unpatched Scrapy DoS vulnerability.
+    Pre-decompression response guard for the unpatched Scrapy DoS vulnerability.
 
-    All four checks run inside ``process_response``, which Scrapy invokes
-    *after* the body bytes are received but *before* any spider callback or
-    other middleware calls ``response.text`` / ``response.body``.  Raising
-    ``IgnoreRequest`` here prevents further processing and frees the buffer.
+    Priority 595 places this middleware immediately *before*
+    HttpCompressionMiddleware (590) in the process_response chain
+    (Scrapy calls process_response in descending priority order, so
+    595 → 590 → lower).  The response body is therefore still compressed
+    when all five checks execute; no decompression has occurred yet.
 
-    Priority in settings.py: 50 (lower number = runs earlier than all other
-    custom middlewares, ensuring bad responses are culled first).
+    Layers
+    ------
+    1. Content-Length header check  – reject if the advertised size exceeds
+       the cap (catches compressed-but-declared-large responses early).
+    2. Actual body byte count       – reject if len(response.body) > cap,
+       independent of the Content-Length header (catches lying/missing headers).
+    3. Stacked Content-Encoding     – e.g. "gzip, gzip"; IgnoreRequest before
+       HttpCompressionMiddleware can attempt multi-pass decompression.
+    4. Response header count cap    – anomalous counts dropped.
+    5. Header value length cap      – each value bounded to MAX_HEADER_VALUE_BYTES.
     """
 
     def __init__(
@@ -128,9 +186,7 @@ class ResponseGuardMiddleware:
     def process_response(
         self, request: Request, response: Response, spider: Spider
     ) -> Response:
-        # ── Layer 1: Content-Length pre-check ─────────────────────────────────
-        # Reject responses that *advertise* a body larger than our cap, before
-        # any middleware attempts to decode or parse the bytes.
+        # ── Layer 1: Content-Length header check ──────────────────────────────
         cl_header: bytes = response.headers.get(b"Content-Length", b"")
         if cl_header:
             try:
@@ -141,18 +197,24 @@ class ResponseGuardMiddleware:
                         f"(limit {self._max_response_bytes}) from {request.url}"
                     )
             except ValueError:
-                # Non-integer Content-Length is malformed; log and continue so
-                # Scrapy's own DOWNLOAD_MAXSIZE enforcement takes over.
                 logger.warning(
                     "Malformed Content-Length header %r from %s",
                     cl_header,
                     request.url,
                 )
 
-        # ── Layer 2: Stacked / unknown Content-Encoding rejection ─────────────
-        # A response with "Content-Encoding: gzip, gzip" (or similar stacked
-        # schemes) is the hallmark of a zip-bomb attack.  We only permit a
-        # single, well-known encoding layer.
+        # ── Layer 2: Actual compressed body byte count ────────────────────────
+        # This check is independent of the Content-Length header and catches
+        # servers that lie about or omit it.  At priority 595 the body has
+        # not yet been decompressed, so this is the raw compressed size.
+        actual_body_len = len(response.body)
+        if actual_body_len > self._max_response_bytes:
+            raise IgnoreRequest(
+                f"Response body size {actual_body_len} exceeds limit "
+                f"{self._max_response_bytes} from {request.url}"
+            )
+
+        # ── Layer 3: Stacked / unknown Content-Encoding rejection ─────────────
         ce_header: bytes = response.headers.get(b"Content-Encoding", b"")
         if ce_header:
             raw_encoding = ce_header.decode("latin-1", errors="replace").strip().lower()
@@ -169,7 +231,7 @@ class ResponseGuardMiddleware:
                     f"from {request.url}"
                 )
 
-        # ── Layer 3: Header count cap ─────────────────────────────────────────
+        # ── Layer 4: Header count cap ─────────────────────────────────────────
         header_count = len(response.headers)
         if header_count > self._max_header_count:
             raise IgnoreRequest(
@@ -177,7 +239,7 @@ class ResponseGuardMiddleware:
                 f"(limit {self._max_header_count}) from {request.url}"
             )
 
-        # ── Layer 4: Individual header value length cap ───────────────────────
+        # ── Layer 5: Individual header value length cap ───────────────────────
         for header_name, header_values in response.headers.items():
             for val in header_values:
                 if len(val) > self._max_header_value_bytes:
@@ -190,7 +252,7 @@ class ResponseGuardMiddleware:
         return response
 
 
-# ─── BehavioralMimicryMiddleware ──────────────────────────────────────────────
+# ─── Anti-fingerprinting constants ────────────────────────────────────────────
 
 class BehavioralMimicryMiddleware:
     """
